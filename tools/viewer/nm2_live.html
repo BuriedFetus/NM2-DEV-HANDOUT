@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NM2 Live</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --ink: #1b1b1b; --muted: #6b6b6b; --line: #dcdcd8;
+    --btn: #3a3a3a; --btn-on: #e0562b; --raw: #b9b9b4; --filt: #2563c9; --filt2: #c2410c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141414; --panel: #1e1e1e; --ink: #ececec; --muted: #9a9a9a; --line: #333;
+      --btn: #4a4a4a; --btn-on: #ff7a45; --raw: #555; --filt: #6ea8ff; --filt2: #ff9a5c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, sans-serif; }
+  header { display: flex; gap: 16px; align-items: baseline; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 18px; margin: 0; }
+  #status { color: var(--muted); }
+  #status.live { color: #2f9e44; }
+  main { display: grid; grid-template-columns: minmax(300px, 420px) 1fr; gap: 16px; padding: 16px; }
+  @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; }
+  .encoders { display: flex; justify-content: space-around; margin-bottom: 14px; }
+  .enc { text-align: center; }
+  .enc svg { width: 90px; height: 90px; }
+  .enc .v { font-size: 20px; font-variant-numeric: tabular-nums; }
+  .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+  .b { aspect-ratio: 1; border-radius: 50%; background: var(--btn); color: #fff; display: flex; flex-direction: column;
+       align-items: center; justify-content: center; font-weight: 600; transition: background .05s; }
+  .b small { font-weight: 400; font-size: 10px; opacity: .8; }
+  .b.on { background: var(--btn-on); }
+  .col { display: flex; flex-direction: column; gap: 16px; }
+  .tilt { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  #pad { width: 200px; height: 200px; border: 1px solid var(--line); border-radius: 8px; }
+  .vals { font-variant-numeric: tabular-nums; }
+  .vals div { margin: 4px 0; }
+  canvas.chart { width: 100%; height: 140px; display: block; }
+  .controls { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  .legend span { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin: 0 4px 0 10px; }
+  #log { font: 12px/1.5 ui-monospace, monospace; height: 180px; overflow: hidden; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>NM2 Live</h1>
+  <span id="status">connecting…</span>
+  <span id="rate" class="vals"></span>
+</header>
+<main>
+  <div class="col">
+    <section>
+      <h2>Device</h2>
+      <div class="encoders">
+        <div class="enc"><svg viewBox="0 0 100 100" id="e1"></svg><div>E1 · CC 1</div><div class="v" id="e1v">–</div></div>
+        <div class="enc"><svg viewBox="0 0 100 100" id="e2"></svg><div>E2 · CC 2</div><div class="v" id="e2v">–</div></div>
+      </div>
+      <div class="grid" id="grid"></div>
+    </section>
+    <section>
+      <h2>Recent messages</h2>
+      <div id="log"></div>
+    </section>
+  </div>
+  <div class="col">
+    <section>
+      <h2>Tilt</h2>
+      <div class="tilt">
+        <canvas id="pad" width="400" height="400"></canvas>
+        <div class="vals">
+          <div>Roll · CC 74: <b id="rollv">–</b> <span style="color:var(--muted)">raw <span id="rollr">–</span></span></div>
+          <div>Pitch · CC 75: <b id="pitchv">–</b> <span style="color:var(--muted)">raw <span id="pitchr">–</span></span></div>
+          <div style="color:var(--muted)">Grey dot = raw, colored dot = filtered</div>
+        </div>
+      </div>
+    </section>
+    <section>
+      <h2>Filter (what the box would do)</h2>
+      <div class="controls">
+        <label><input type="checkbox" id="median" checked> Spike filter (median of 3)</label>
+        <label>Smoothing: average of <input type="range" id="avg" min="1" max="10" value="7"> <b id="avgv">7</b> values</label>
+        <span class="legend"><span style="background:var(--raw)"></span>raw<span style="background:var(--filt)"></span>filtered</span>
+      </div>
+      <div style="color:var(--muted)">Roll · CC 74 (last 10 s)</div>
+      <canvas class="chart" id="c74"></canvas>
+      <div style="color:var(--muted)">Pitch · CC 75 (last 10 s)</div>
+      <canvas class="chart" id="c75"></canvas>
+    </section>
+  </div>
+</main>
+<script>
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const noteName = n => NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 1);
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const WINDOW_MS = 10000;
+
+// Buttons: notes are learned from presses, in A minor from 69 by default (see docs/nm2-midi-map.md).
+const DEFAULT_NOTES = [69, 71, 72, 74, 76, 77, 79, 81, 83, 84, 86, 88, 89, 91, 93, 95, 96, 98];
+const grid = document.getElementById("grid");
+const buttonByNote = {};
+DEFAULT_NOTES.forEach((note, i) => {
+  const el = document.createElement("div");
+  el.className = "b";
+  el.innerHTML = `${i + 1}<small>${noteName(note)}</small>`;
+  grid.appendChild(el);
+  buttonByNote[note] = el;
+});
+
+function drawEncoder(id, value) {
+  const svg = document.getElementById(id);
+  const a0 = 135, sweep = 270, a = a0 + sweep * value / 127;
+  const pt = (deg, r) => [50 + r * Math.cos(deg * Math.PI / 180), 50 + r * Math.sin(deg * Math.PI / 180)];
+  const arc = (from, to) => {
+    const [x0, y0] = pt(from, 40), [x1, y1] = pt(to, 40);
+    return `M${x0},${y0} A40,40 0 ${to - from > 180 ? 1 : 0} 1 ${x1},${y1}`;
+  };
+  const [kx, ky] = pt(a, 30);
+  svg.innerHTML =
+    `<path d="${arc(a0, a0 + sweep)}" stroke="${css("--line")}" stroke-width="8" fill="none" stroke-linecap="round"/>` +
+    (value > 0 ? `<path d="${arc(a0, a)}" stroke="${css("--filt")}" stroke-width="8" fill="none" stroke-linecap="round"/>` : "") +
+    `<line x1="50" y1="50" x2="${kx}" y2="${ky}" stroke="${css("--ink")}" stroke-width="4" stroke-linecap="round"/>`;
+  document.getElementById(id + "v").textContent = value;
+}
+drawEncoder("e1", 0); drawEncoder("e2", 0);
+document.getElementById("e1v").textContent = "–";
+document.getElementById("e2v").textContent = "–";
+
+// Tilt filter: optional median of 3 (drops single-message spikes), then moving average.
+const axes = {
+  74: { raw: [], filtered: [], hist: [], avg: [], last: null, lastRaw: null },
+  75: { raw: [], filtered: [], hist: [], avg: [], last: null, lastRaw: null },
+};
+const medianEl = document.getElementById("median"), avgEl = document.getElementById("avg");
+avgEl.oninput = () => (document.getElementById("avgv").textContent = avgEl.value);
+
+function filterValue(axis, v) {
+  axis.hist.push(v);
+  if (axis.hist.length > 3) axis.hist.shift();
+  let m = v;
+  if (medianEl.checked && axis.hist.length === 3) m = [...axis.hist].sort((a, b) => a - b)[1];
+  axis.avg.push(m);
+  while (axis.avg.length > +avgEl.value) axis.avg.shift();
+  return axis.avg.reduce((s, x) => s + x, 0) / axis.avg.length;
+}
+
+function onTilt(cc, v, t) {
+  const axis = axes[cc];
+  const f = filterValue(axis, v);
+  axis.raw.push([t, v]);
+  axis.filtered.push([t, f]);
+  axis.last = f;
+  axis.lastRaw = v;
+  const name = cc === 74 ? "roll" : "pitch";
+  document.getElementById(name + "v").textContent = f.toFixed(0);
+  document.getElementById(name + "r").textContent = v;
+}
+
+// Charts and tilt pad, redrawn every frame.
+function sizeCanvas(c) {
+  const r = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  if (c.width !== Math.round(r.width * dpr)) { c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr); }
+  return dpr;
+}
+
+function drawChart(id, axis, now) {
+  const c = document.getElementById(id), dpr = sizeCanvas(c), ctx = c.getContext("2d");
+  const W = c.width, H = c.height, x = t => W - (now - t) / WINDOW_MS * W, y = v => H - 4 * dpr - v / 127 * (H - 8 * dpr);
+  ctx.clearRect(0, 0, W, H);
+  ctx.strokeStyle = css("--line"); ctx.lineWidth = 1;
+  [0, 64, 127].forEach(v => { ctx.beginPath(); ctx.moveTo(0, y(v)); ctx.lineTo(W, y(v)); ctx.stroke(); });
+  for (const [series, color, width] of [[axis.raw, css("--raw"), 1.5], [axis.filtered, css("--filt"), 2.5]]) {
+    while (series.length > 1 && series[1][0] < now - WINDOW_MS) series.shift();
+    if (!series.length) continue;
+    ctx.strokeStyle = color; ctx.lineWidth = width * dpr; ctx.beginPath();
+    series.forEach(([t, v], i) => {
+      if (i === 0) ctx.moveTo(Math.max(0, x(t)), y(v));
+      else { ctx.lineTo(x(t), y(series[i - 1][1])); ctx.lineTo(x(t), y(v)); }
+    });
+    ctx.lineTo(W, y(series[series.length - 1][1]));
+    ctx.stroke();
+  }
+}
+
+function drawPad() {
+  const c = document.getElementById("pad"), ctx = c.getContext("2d"), S = c.width;
+  ctx.clearRect(0, 0, S, S);
+  ctx.strokeStyle = css("--line"); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(S / 2, 0); ctx.lineTo(S / 2, S); ctx.moveTo(0, S / 2); ctx.lineTo(S, S / 2); ctx.stroke();
+  ctx.fillStyle = css("--muted"); ctx.font = "22px system-ui";
+  ctx.fillText("forward", S / 2 + 8, 26); ctx.fillText("back", S / 2 + 8, S - 10);
+  ctx.fillText("left", 8, S / 2 - 8); ctx.fillText("right", S - 52, S / 2 - 8);
+  // Rolling right lowers CC 74 (360° test), so mirror x to make the dot follow the hand.
+  const pos = (r, p) => [(127 - r) / 127 * S, S - p / 127 * S];
+  const dot = (r, p, color, rad) => {
+    if (r === null || p === null) return;
+    const [px, py] = pos(r, p);
+    ctx.fillStyle = color; ctx.beginPath(); ctx.arc(px, py, rad, 0, 2 * Math.PI); ctx.fill();
+  };
+  dot(axes[74].lastRaw ?? 64, axes[75].lastRaw ?? 64, css("--raw"), 10);
+  dot(axes[74].last ?? 64, axes[75].last ?? 64, css("--filt"), 14);
+}
+
+(function frame() {
+  const now = Date.now();
+  drawChart("c74", axes[74], now);
+  drawChart("c75", axes[75], now);
+  drawPad();
+  requestAnimationFrame(frame);
+})();
+
+// Message log and rate.
+const logEl = document.getElementById("log"), logLines = [];
+let count = 0;
+setInterval(() => { document.getElementById("rate").textContent = `${count} msg/s`; count = 0; }, 1000);
+
+function log(e) {
+  const time = new Date(e.t).toTimeString().slice(0, 8) + "." + String(Math.floor(e.t % 1000)).padStart(3, "0");
+  const what = e.kind === "Control change" ? `CC ${e.num} = ${e.val}` : `${e.kind} ${e.num} (${noteName(e.num)})`;
+  logLines.unshift(`${time}  ${e.src === "Bluetooth" ? "BT " : "USB"}  ch${e.ch}  ${what}`);
+  logLines.length = Math.min(logLines.length, 12);
+  logEl.textContent = logLines.join("\n");
+  logEl.style.whiteSpace = "pre";
+}
+
+const status = document.getElementById("status");
+const source = new EventSource("/events");
+source.onopen = () => { status.textContent = "live"; status.className = "live"; };
+source.onerror = () => { status.textContent = "disconnected – is nm2_live.py running?"; status.className = ""; };
+source.onmessage = msg => {
+  const e = JSON.parse(msg.data);
+  if (e.kind === "disconnected") { status.textContent = "NM2 disconnected – waiting for it to come back"; status.className = ""; return; }
+  if (e.kind === "connected") { status.textContent = `live (${e.via || "USB"})`; status.className = "live"; return; }
+  count++;
+  log(e);
+  if (e.kind === "Note on" || e.kind === "Note off") {
+    let el = buttonByNote[e.num];
+    if (el) el.classList.toggle("on", e.kind === "Note on");
+  } else if (e.num === 1 || e.num === 2) {
+    drawEncoder(e.num === 1 ? "e1" : "e2", e.val);
+  } else if (e.num === 74 || e.num === 75) {
+    onTilt(e.num, e.val, Date.now());
+  }
+};
+</script>
+</body>
+</html>

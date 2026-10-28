@@ -1,0 +1,45 @@
+# Builds "NM2 Ratchet.exe" (tools/box/nm2_gui.py) on a Windows machine at GitHub.
+# Download it from the repo's Actions tab: latest "Windows exe" run → Artifacts → NM2-Ratchet-windows.
+name: Windows exe
+
+on:
+  push:
+    branches: [main]
+    paths: ["tools/**", ".github/workflows/windows-exe.yml"]
+  workflow_dispatch:   # "Run workflow" button on GitHub
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"   # logs are not a console: without this, printing "→" fails (cp1252)
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7.0.0   # 7.1.0 is a day old (2026-10-22); move to @v7 later
+        with:
+          python-version: "3.12"
+
+      - name: Install python-rtmidi and PyInstaller
+        run: python -m pip install python-rtmidi==1.5.8 pyinstaller==6.11.1
+
+      - name: Test the ratchet (fake NM2)
+        run: python tools/box/test_box.py
+
+      - name: Test the window (fake NM2)
+        run: python tools/box/nm2_gui.py --selftest
+
+      - name: Build NM2 Ratchet.exe
+        run: pyinstaller --onefile --windowed --name "NM2 Ratchet" --paths tools/box tools/box/nm2_gui.py
+
+      - name: Test the built .exe (fake NM2)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\NM2 Ratchet.exe" -ArgumentList "--selftest" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Error "Self-test of the .exe failed (exit code $($p.ExitCode))"; exit 1 }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: NM2-Ratchet-windows
+          path: dist/NM2 Ratchet.exe
+          retention-days: 30

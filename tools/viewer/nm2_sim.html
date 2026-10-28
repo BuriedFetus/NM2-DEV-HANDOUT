@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NM2 Box Simulator</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --ink: #1b1b1b; --muted: #6b6b6b; --line: #dcdcd8;
+    --accent: #2563c9; --active: #e0562b; --track: #ececea; --bad: #d62828; --ok: #2f9e44;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141414; --panel: #1e1e1e; --ink: #ececec; --muted: #9a9a9a; --line: #333;
+      --accent: #6ea8ff; --active: #ff7a45; --track: #2a2a2a; --bad: #ff5c5c; --ok: #51cf66;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, sans-serif; }
+  header { display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 18px; margin: 0; }
+  header a { color: var(--accent); }
+  #status { color: var(--muted); }
+  #status.live { color: var(--ok); }
+  main { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; gap: 16px; padding: 16px; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; }
+  .col { display: flex; flex-direction: column; gap: 16px; }
+  .settings label { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 8px 0; }
+  .settings input[type=number] { width: 70px; }
+  .settings select { max-width: 170px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .box-state { font-size: 15px; font-variant-numeric: tabular-nums; }
+  .box-state div { margin: 4px 0; }
+  .params { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 6px 16px; }
+  .p { display: grid; grid-template-columns: 34px 1fr 40px; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; }
+  .p.active { background: color-mix(in srgb, var(--active) 15%, transparent); }
+  .p .n { font-weight: 600; text-align: right; }
+  .p.active .n { color: var(--active); }
+  .p .v { font-variant-numeric: tabular-nums; text-align: right; }
+  .p input[type=range] { width: 100%; accent-color: var(--accent); }
+  .p.flash .v { color: var(--accent); font-weight: 700; }
+  .p.jump { outline: 2px solid var(--bad); }
+  #log { font: 12px/1.5 ui-monospace, monospace; height: 220px; overflow: hidden; white-space: pre; }
+  #log .bad { color: var(--bad); font-weight: 700; }
+  #log .muted { color: var(--muted); }
+  .counters { display: flex; gap: 18px; font-variant-numeric: tabular-nums; margin-bottom: 8px; }
+  .counters b.bad { color: var(--bad); }
+  button { font: inherit; padding: 4px 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NM2 Box Simulator</h1>
+  <span id="status">connecting…</span>
+  <a href="/">raw viewer</a>
+</header>
+<main>
+  <div class="col">
+    <section>
+      <h2>Box now</h2>
+      <div class="box-state">
+        <div>Selected: <b id="sel">none</b></div>
+        <div>Tilt (filtered): roll <b id="roll">–</b> · pitch <b id="pitch">–</b></div>
+        <div>Reference: <b id="ref">–</b></div>
+        <div>Notes swallowed: <b id="swallowed">0</b></div>
+      </div>
+      <p class="hint">Hold an NM2 button and tilt. Releasing keeps the value; the next press continues from it.</p>
+    </section>
+    <section class="settings">
+      <h2>Box settings</h2>
+      <label>Axis <select id="axis">
+        <option value="roll">Roll (left/right)</option>
+        <option value="pitch">Pitch (back/forward)</option>
+        <option value="both">Both: roll = A, pitch = B</option>
+      </select></label>
+      <label>Smoothing (average of) <input type="number" id="avg" min="1" max="20" value="7"></label>
+      <label>Spike filter (median of 3) <input type="checkbox" id="median" checked></label>
+      <label>Gain <input type="number" id="gain" min="0.1" max="4" step="0.1" value="1"></label>
+      <label>Settle after press (ms) <input type="number" id="settle" min="0" max="300" value="40"></label>
+      <label>Max speed (values/s, 0 = off) <input type="number" id="slew" min="0" max="2000" step="10" value="300"></label>
+      <label>Jump alarm (bigger than) <input type="number" id="jumpLimit" min="1" max="127" value="8"></label>
+      <div class="hint">Max speed 300 = full range 0→127 in about 0.4 s at the fastest.</div>
+    </section>
+    <section class="settings">
+      <h2>Power-on</h2>
+      <label>Box starting value <input type="number" id="start" min="0" max="127" value="64"></label>
+      <label>Synth learns from box at power-on <input type="checkbox" id="sync"></label>
+      <div class="hint">Unchecked: the synth keeps its own values, like a real synth with a saved patch.
+        Drag the synth sliders to set them, then press "Power on" and tilt to hear (see) the mismatch.</div>
+      <p><button id="power">Power on (reset box)</button> <button id="randomize">Randomize synth</button></p>
+    </section>
+  </div>
+  <div class="col">
+    <section>
+      <h2>Virtual synth</h2>
+      <div class="hint" style="margin-bottom:8px">Sliders = the synth's real parameter values (drag them like the synth's own knobs).
+        Small mark under each = the value the box thinks it is.</div>
+      <div class="params" id="params"></div>
+    </section>
+    <section>
+      <h2>What the synth receives</h2>
+      <div class="counters">
+        <span>CC sent: <b id="sent">0</b></span>
+        <span>Jumps: <b id="jumps">0</b></span>
+        <span>Biggest step: <b id="biggest">0</b></span>
+        <button id="clear">clear</button>
+      </div>
+      <div id="log"></div>
+    </section>
+  </div>
+</main>
+<script>
+// Button notes as measured (docs/nm2-midi-map.md): A minor from 69, buttons 1–18.
+const NOTES = [69, 71, 72, 74, 76, 77, 79, 81, 83, 84, 86, 88, 89, 91, 93, 95, 96, 98];
+const buttonOfNote = Object.fromEntries(NOTES.map((n, i) => [n, i]));
+const $ = id => document.getElementById(id);
+const num = id => +$(id).value;
+const clamp = v => Math.max(0, Math.min(127, v));
+
+// Parameters: in "both" mode each button has A (roll) and B (pitch).
+function paramKeys() {
+  const keys = [];
+  for (let i = 0; i < 18; i++) {
+    if ($("axis").value === "both") keys.push(`${i}A`, `${i}B`);
+    else keys.push(`${i}A`);
+  }
+  return keys;
+}
+const synth = {};   // real synth values
+const box = {};     // what the box believes
+const out = {};     // box output value, moving toward target under the speed limit
+const target = {};
+
+function buildParams() {
+  const el = $("params");
+  el.innerHTML = "";
+  for (const k of paramKeys()) {
+    synth[k] ??= 64; box[k] ??= num("start"); out[k] ??= box[k]; target[k] ??= box[k];
+    const row = document.createElement("div");
+    row.className = "p"; row.id = "p" + k;
+    const label = (+k.slice(0, -1) + 1) + ($("axis").value === "both" ? k.slice(-1) : "");
+    row.innerHTML = `<span class="n">${label}</span>
+      <div><input type="range" min="0" max="127" value="${synth[k]}">
+      <svg width="100%" height="6"><rect class="mark" y="0" width="3" height="6" fill="var(--muted)"/></svg></div>
+      <span class="v">${synth[k]}</span>`;
+    row.querySelector("input").oninput = e => { synth[k] = +e.target.value; render(k); };
+    el.appendChild(row);
+    render(k);
+  }
+}
+
+function render(k) {
+  const row = $("p" + k);
+  if (!row) return;
+  row.querySelector("input").value = synth[k];
+  row.querySelector(".v").textContent = synth[k];
+  row.querySelector(".mark").setAttribute("x", (box[k] / 127 * 100).toFixed(1) + "%");
+}
+
+// Filter: median of 3, then moving average.
+const axes = { 74: { hist: [], avg: [], f: null }, 75: { hist: [], avg: [], f: null } };
+function filter(cc, v) {
+  const a = axes[cc];
+  a.hist.push(v); if (a.hist.length > 3) a.hist.shift();
+  let m = v;
+  if ($("median").checked && a.hist.length === 3) m = [...a.hist].sort((x, y) => x - y)[1];
+  a.avg.push(m); while (a.avg.length > num("avg")) a.avg.shift();
+  a.f = a.avg.reduce((s, x) => s + x, 0) / a.avg.length;
+}
+// Tilting right lowers CC 74, so roll is inverted: right adds. Forward raises CC 75: forward adds.
+const tiltOf = { A: () => $("axis").value === "pitch" ? axes[75].f : 127 - axes[74].f, B: () => axes[75].f };
+
+let selected = null, pressAt = 0, refs = null, startVals = null, swallowed = 0;
+
+function onNote(e) {
+  swallowed++;
+  $("swallowed").textContent = swallowed;
+  const b = buttonOfNote[e.num];
+  if (b === undefined) return;
+  if (e.kind === "Note on") {
+    selected = b; pressAt = performance.now(); refs = null;
+  } else if (selected === b) {
+    selected = null; refs = null;
+  }
+  for (const k of paramKeys()) $("p" + k)?.classList.toggle("active", selected !== null && +k.slice(0, -1) === selected);
+  $("sel").textContent = selected === null ? "none" : `button ${selected + 1}`;
+  $("ref").textContent = "–";
+}
+
+function update() {
+  if (selected === null) return;
+  if (performance.now() - pressAt < num("settle")) return;
+  const parts = $("axis").value === "both" ? ["A", "B"] : ["A"];
+  if (refs === null) {
+    if (parts.some(p => tiltOf[p]() === null)) return;
+    refs = {}; startVals = {};
+    for (const p of parts) { refs[p] = tiltOf[p](); startVals[p] = box[`${selected}${p}`]; }
+    $("ref").textContent = parts.map(p => refs[p].toFixed(0)).join(" / ");
+    return;
+  }
+  for (const p of parts) {
+    const k = `${selected}${p}`;
+    target[k] = clamp(Math.round(startVals[p] + (tiltOf[p]() - refs[p]) * num("gain")));
+  }
+}
+
+// Output tick: move each output toward its target, limited by max speed, and "send" changes.
+let sent = 0, jumps = 0, biggest = 0, lastTick = performance.now();
+setInterval(() => {
+  const now = performance.now(), dt = (now - lastTick) / 1000;
+  lastTick = now;
+  const maxStep = num("slew") > 0 ? Math.max(1, num("slew") * dt) : 127;
+  for (const k of Object.keys(target)) {
+    if (target[k] === out[k]) continue;
+    const step = Math.max(-maxStep, Math.min(maxStep, target[k] - out[k]));
+    out[k] = Math.round(out[k] + step);
+    box[k] = out[k];
+    send(k, out[k]);
+  }
+}, 10);
+
+function send(k, v) {
+  const jump = Math.abs(v - synth[k]);
+  sent++; biggest = Math.max(biggest, jump);
+  const bad = jump > num("jumpLimit");
+  if (bad) jumps++;
+  const label = "param " + (+k.slice(0, -1) + 1) + ($("axis").value === "both" ? k.slice(-1) : "");
+  addLog(`${new Date().toTimeString().slice(0, 8)}  ${label} → ${v}` + (bad ? `   JUMP ${synth[k]} → ${v}` : ""), bad ? "bad" : "");
+  synth[k] = v;
+  const row = $("p" + k);
+  render(k);
+  if (row) {
+    row.classList.add("flash"); clearTimeout(row._t);
+    row._t = setTimeout(() => row.classList.remove("flash"), 150);
+    if (bad) { row.classList.add("jump"); setTimeout(() => row.classList.remove("jump"), 1500); }
+  }
+  $("sent").textContent = sent; $("jumps").textContent = jumps; $("biggest").textContent = biggest;
+  $("jumps").className = jumps ? "bad" : "";
+}
+
+const logLines = [];
+function addLog(text, cls) {
+  logLines.unshift([text, cls]);
+  logLines.length = Math.min(logLines.length, 14);
+  $("log").innerHTML = logLines.map(([t, c]) => `<div class="${c}">${t}</div>`).join("");
+}
+
+function powerOn() {
+  selected = null; refs = null;
+  for (const k of paramKeys()) {
+    box[k] = out[k] = target[k] = num("start");
+    if ($("sync").checked) synth[k] = box[k];
+    render(k);
+  }
+  addLog(`--- power on: box values = ${num("start")}` + ($("sync").checked ? ", sent to synth" : ", synth keeps its own"), "muted");
+}
+
+$("power").onclick = powerOn;
+$("randomize").onclick = () => { for (const k of paramKeys()) { synth[k] = Math.floor(Math.random() * 128); render(k); } };
+$("clear").onclick = () => { sent = jumps = biggest = 0; logLines.length = 0; addLog("", ""); ["sent", "jumps", "biggest"].forEach(id => $(id).textContent = 0); $("jumps").className = ""; };
+$("axis").onchange = () => { selected = null; buildParams(); };
+buildParams();
+
+const source = new EventSource("/events");
+source.onopen = () => { $("status").textContent = "live"; $("status").className = "live"; };
+source.onerror = () => { $("status").textContent = "disconnected – is nm2_live.py running?"; $("status").className = ""; };
+source.onmessage = msg => {
+  const e = JSON.parse(msg.data);
+  if (e.kind === "disconnected") { $("status").textContent = "NM2 disconnected – waiting for it to come back"; $("status").className = ""; return; }
+  if (e.kind === "connected") { $("status").textContent = `live (${e.via || "USB"})`; $("status").className = "live"; return; }
+  if (e.kind === "Note on" || e.kind === "Note off") onNote(e);
+  else if (e.kind === "Control change" && (e.num === 74 || e.num === 75)) {
+    filter(e.num, e.val);
+    $("roll").textContent = axes[74].f === null ? "–" : axes[74].f.toFixed(0);
+    $("pitch").textContent = axes[75].f === null ? "–" : axes[75].f.toFixed(0);
+  }
+  update();
+};
+</script>
+</body>
+</html>
