@@ -61,5 +61,3 @@ The behavior was measured on a real NM2 and validated by hand in the simulator.
 - Computer box: working on Linux and Windows.
 - Hand-off to the NM2 developer: ready in `handoff/`. Make the zip with
   `git archive --format=zip -o nm2-handoff.zip handoff-package` (no git history).
-
-This repo is private.
